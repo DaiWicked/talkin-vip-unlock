@@ -1,0 +1,21 @@
+# 原始 APK 与下载的工具 —— 体积大且非本仓库产出，不入库
+Talkin_5.9.0.apk
+tools/
+_local/
+
+# 反编译输出（重新生成：jadx -d output/base-src --no-res work/splits/base.apk）
+output/
+
+# 构建中间产物
+lspmod/app/build-classes/
+lspmod/app/build-dex/
+lspmod/app/build-res.zip
+lspmod/apistub-classes/
+lspmod/libs/svc-aar/
+lspmod/libs/libxposed-*.aar
+lspmod/libs/libxposed-*.jar
+lspmod/*.keystore
+
+# 系统
+Thumbs.db
+.DS_Store
