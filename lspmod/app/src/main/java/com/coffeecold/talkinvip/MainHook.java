@@ -11,19 +11,24 @@ import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 /**
- * Talkin 5.9.0 VIP hook — LSPosed 模块入口
+ * Talkin 5.9.0 (com.talkin.learn) VIP hook — LSPosed 模块入口
  *
- * 全 app 的 VIP 判定收敛在 defpackage.j6c（gz6.j() 返回其单例）：
- *   j() → isVip 判定（43 处调用）
- *   i() → has_trialed（试用状态）
- *   k() → was_vip
- * 实体层兜底：VipInfo / VipDetailResp 的 getter。
- * VipInfo 内部字段直接回写，保证缓存/持久化数据本身也是 VIP 态。
+ * 核心 VIP 判定收敛在混淆后的单例管理类（方法名 j/i/k 各构建一致，
+ * 类名随混淆批次变化：磁盘包为 j6c，Google Play 安装包为 ula）。
+ * 结构签名：持有 VipDetailResp 字段 + 三个无参布尔方法 j()Z/i()Z/k()Z。
+ *
+ * 设备构建 (ula) 实体 getter 映射（dexdump 逐字节验证）：
+ *   VipInfo:       e()=isVip, d()=wasVip, b()=hasTrailed
+ *   VipDetailResp: e()=isVip, d()=wasVip, b()=getDetail(不 hook)
+ *   VipDetail:     a()=expire_time, b()=has_trialed, d()=is_subscribed
  */
 public class MainHook implements IXposedHookLoadPackage {
 
     private static final String TAG = "TalkinVIP";
     private static final String TARGET_PKG = "com.talkin.learn";
+
+    /** VIP 管理类候选（按混淆批次排列，逐个探测 j()Z 命中即用） */
+    private static final String[] MANAGER_CANDIDATES = {"ula", "j6c", "v5c", "h56"};
 
     private static void log(String msg) {
         XposedBridge.log("[" + TAG + "] " + msg);
@@ -36,105 +41,111 @@ public class MainHook implements IXposedHookLoadPackage {
         }
         log("loaded into " + lpp.packageName + " process=" + lpp.processName);
 
-        ClassLoader cl = lpp.classLoader;
         try {
-            installHooks(cl);
-            log("hooks installed");
+            installHooks(lpp.classLoader);
         } catch (Throwable t) {
-            log("install failed: " + XposedBridge.stackTraceToString(t));
+            log("install failed: " + android.util.Log.getStackTraceString(t));
         }
     }
 
-    private static void installHooks(ClassLoader cl) throws Throwable {
-        final Class<?> j6c = XposedHelpers.findClass("defpackage.j6c", cl);
-
-        // 1) j6c.j() → true（全局 VIP 判定）
-        XposedHelpers.findAndHookMethod(j6c, "j", new XC_MethodReplacement() {
-            @Override
-            protected Object replaceHookedMethod(MethodHookParam param) {
-                return true;
+    private static void installHooks(ClassLoader cl) {
+        // 1) VIP 管理类：探测候选类中拥有无参 j()Z 的那个
+        Class<?> manager = null;
+        for (String name : MANAGER_CANDIDATES) {
+            try {
+                Class<?> c = XposedHelpers.findClass(name, cl);
+                Method j = c.getDeclaredMethod("j");
+                if (j.getReturnType() == boolean.class) {
+                    manager = c;
+                    log("manager class = " + name);
+                    break;
+                }
+            } catch (Throwable ignored) {
             }
-        });
+        }
+        if (manager == null) {
+            throw new IllegalStateException("no manager class found among candidates");
+        }
 
-        // 2) j6c.i() → true（has_trialed：从未试用 → 试用入口常开）
-        XposedHelpers.findAndHookMethod(j6c, "i", new XC_MethodReplacement() {
-            @Override
-            protected Object replaceHookedMethod(MethodHookParam param) {
-                return true;
-            }
-        });
+        // j() → true（全局 isVip 判定）
+        hook(manager, "j", true);
+        // i() → true（has_trialed）
+        hook(manager, "i", true);
+        // k() → true（was_vip）
+        hook(manager, "k", true);
 
-        // 3) j6c.k() → true（was_vip：老用户回流 UI）
-        XposedHelpers.findAndHookMethod(j6c, "k", new XC_MethodReplacement() {
-            @Override
-            protected Object replaceHookedMethod(MethodHookParam param) {
-                return true;
-            }
-        });
+        // 2) 实体层 getter 兜底（混淆名按设备构建映射）
+        hookEntity(cl, "com.talk.common.entity.response.VipInfo",
+                new String[][] {{"e", "true"}, {"d", "true"}, {"b", "true"}});
+        hookEntity(cl, "com.talk.common.entity.response.VipDetailResp",
+                new String[][] {{"e", "true"}, {"d", "true"}});
 
-        // 4) 实体层 getter 兜底
-        final Class<?> vipInfo = XposedHelpers.findClass(
-                "com.talk.common.entity.response.VipInfo", cl);
-        hookBoolGetter(vipInfo, "getIsVip");
-        hookBoolGetter(vipInfo, "getWasVip");
-        hookBoolGetter(vipInfo, "getHasTrailed");
-
-        final Class<?> vipDetailResp = XposedHelpers.findClass(
-                "com.talk.common.entity.response.VipDetailResp", cl);
-        hookBoolGetter(vipDetailResp, "getIsVip");
-        hookBoolGetter(vipDetailResp, "getWasVip");
-
-        // VipDetailResp.VipDetail.getHas_trialed() → false（未试用 → 免费试用可点）
+        // 3) VipDetail：expire 拉远、has_trialed=false（试用入口常开）、is_subscribed=true
         try {
             Class<?> detail = XposedHelpers.findClass(
                     "com.talk.common.entity.response.VipDetailResp$VipDetail", cl);
-            XposedHelpers.findAndHookMethod(detail, "getHas_trialed", new XC_MethodReplacement() {
+            XposedHelpers.findAndHookMethod(detail, "a", new XC_MethodReplacement() {
                 @Override
                 protected Object replaceHookedMethod(MethodHookParam param) {
-                    return false;
+                    return 4102444800L; // 2100-01-01
                 }
             });
-            // VipDetail.getExpire_time() → 远期时间戳 (2099-12-31)
-            XposedHelpers.findAndHookMethod(detail, "getExpire_time", new XC_MethodReplacement() {
-                @Override
-                protected Object replaceHookedMethod(MethodHookParam param) {
-                    return 4102444800L; // 2100-01-01 UTC 秒级；如毫秒由调用方换算同样够大
-                }
-            });
+            hook(detail, "b", false); // has_trialed
+            hook(detail, "d", true);  // is_subscribed
         } catch (Throwable t) {
-            log("VipDetail hook skipped: " + t.getMessage());
+            log("VipDetail hooks skipped: " + t.getMessage());
         }
 
-        // 5) 数据源回写：VipInfo 实例内部字段直接置 VIP 态（影响缓存与持久化快照）
-        XposedHelpers.findAndHookMethod(vipInfo, "getIsVip", new XC_MethodReplacement() {
-            @Override
-            protected Object replaceHookedMethod(MethodHookParam param) throws Throwable {
-                patchVipInfoFields(param.thisObject);
-                return Boolean.TRUE;
-            }
-        });
-    }
-
-    private static void hookBoolGetter(Class<?> clazz, String method) {
+        // 4) 数据源回写：VipInfo 内部字段置 VIP 态
         try {
-            XposedHelpers.findAndHookMethod(clazz, method, new XC_MethodReplacement() {
+            final Class<?> vipInfo = XposedHelpers.findClass(
+                    "com.talk.common.entity.response.VipInfo", cl);
+            XposedHelpers.findAndHookMethod(vipInfo, "e", new XC_MethodReplacement() {
                 @Override
                 protected Object replaceHookedMethod(MethodHookParam param) {
+                    patchVipInfoFields(param.thisObject);
                     return Boolean.TRUE;
                 }
             });
         } catch (Throwable t) {
-            log("hook " + clazz.getSimpleName() + "." + method + " skipped: " + t.getMessage());
+            log("VipInfo patcher skipped: " + t.getMessage());
+        }
+
+        log("all hooks installed");
+    }
+
+    private static void hook(Class<?> clazz, String method, final boolean result) {
+        try {
+            XposedHelpers.findAndHookMethod(clazz, method, new XC_MethodReplacement() {
+                @Override
+                protected Object replaceHookedMethod(MethodHookParam param) {
+                    return result;
+                }
+            });
+        } catch (Throwable t) {
+            log("hook " + clazz.getName() + "." + method + " skipped: " + t.getMessage());
+        }
+    }
+
+    private static void hookEntity(ClassLoader cl, String className, String[][] methods) {
+        try {
+            Class<?> c = XposedHelpers.findClass(className, cl);
+            for (String[] m : methods) {
+                hook(c, m[0], Boolean.parseBoolean(m[1]));
+            }
+        } catch (Throwable t) {
+            log("entity " + className + " skipped: " + t.getMessage());
         }
     }
 
     private static void patchVipInfoFields(Object vipInfo) {
         try {
             Class<?> c = vipInfo.getClass();
-            setBooleanField(c, vipInfo, "isVip", true);
-            setBooleanField(c, vipInfo, "wasVip", true);
-            setBooleanField(c, vipInfo, "hasTrailed", true);
-            setBooleanField(c, vipInfo, "isSubscribed", true);
+            // 字段 b=hasTrailed, c=isVip, d=wasVip, e=isSubscribed（设备构建声明序）
+            setBooleanField(c, vipInfo, "c", true);
+            setBooleanField(c, vipInfo, "d", true);
+            setBooleanField(c, vipInfo, "b", true);
+            setBooleanField(c, vipInfo, "e", true);
         } catch (Throwable t) {
             // 字段回写失败不影响 getter hook 兜底
         }
