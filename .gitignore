@@ -19,3 +19,5 @@ lspmod/*.keystore
 # 系统
 Thumbs.db
 .DS_Store
+lspmod/app/debug.keystore
+*.idsig

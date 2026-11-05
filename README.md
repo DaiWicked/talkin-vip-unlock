@@ -6,7 +6,7 @@
 ## 仓库结构
 
 ```
-├── TalkinVIP-1.0.apk            # 模块成品（已签名，可直接安装）
+├── TalkinVIP-1.1.apk            # 模块成品（已签名，可直接安装）
 ├── lspmod/                      # 模块工程（aapt2 + javac + d8 手动构建链）
 │   ├── app/src/main/
 │   │   ├── java/com/coffeecold/talkinvip/MainHook.java   # hook 源码
@@ -71,6 +71,7 @@ apksigner sign --ks debug.keystore --out TalkinVIP-1.0.apk out.apk
 
 ## 安装使用
 
-1. 安装 `TalkinVIP-1.0.apk`
-2. LSPosed 管理器 → 模块 → 启用，作用域勾选 Talkin
-3. 强停 Talkin 后重开，LSPosed 日志应出现 `[TalkinVIP] hooks installed on defpackage.j6c`
+1. 安装 `TalkinVIP-1.1.apk`
+2. LSPosed 管理器 → 模块 → 启用，作用域勾选 Talkin（`com.talkin.learn`）
+3. 强停 Talkin 后重开，LSPosed 日志应出现 `[TalkinVIP] hooks installed`
+4. 若无日志：确认模块已勾选作用域、目标包名为 `com.talkin.learn`（不是 `com.talk.inapp`）

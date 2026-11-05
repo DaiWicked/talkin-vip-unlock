@@ -23,7 +23,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 public class MainHook implements IXposedHookLoadPackage {
 
     private static final String TAG = "TalkinVIP";
-    private static final String TARGET_PKG = "com.talk.inapp";
+    private static final String TARGET_PKG = "com.talkin.learn";
 
     private static void log(String msg) {
         XposedBridge.log("[" + TAG + "] " + msg);
@@ -37,47 +37,11 @@ public class MainHook implements IXposedHookLoadPackage {
         log("loaded into " + lpp.packageName + " process=" + lpp.processName);
 
         ClassLoader cl = lpp.classLoader;
-
-        // 延迟 hook：Talkin 多 dex 且类在启动后才加载，用 class nativity 时机逐个挂
-        hookWhenReady(cl, "defpackage.j6c", new Runnable() {
-            @Override
-            public void run() { /* marker */ }
-        });
-    }
-
-    private static void hookWhenReady(final ClassLoader cl, final String className, final Runnable done) {
-        // 方案：hook ClassLoader.loadClass，目标类一加载立即安装 hooks
         try {
-            XposedHelpers.findAndHookMethod("java.lang.ClassLoader", cl, "loadClass",
-                    String.class, boolean.class, new XC_MethodHook() {
-                        private boolean installed = false;
-
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                            if (installed) {
-                                return;
-                            }
-                            String name = (String) param.args[0];
-                            if (!"defpackage.j6c".equals(name)) {
-                                return;
-                            }
-                            installed = true;
-                            try {
-                                installHooks(cl);
-                                log("hooks installed on " + className);
-                            } catch (Throwable t) {
-                                log("install failed: " + XposedBridge.stackTraceToString(t));
-                            }
-                        }
-                    });
+            installHooks(cl);
+            log("hooks installed");
         } catch (Throwable t) {
-            // 直接尝试（应用已在运行时注入的场景）
-            try {
-                installHooks(cl);
-                log("hooks installed directly");
-            } catch (Throwable t2) {
-                log("direct install failed: " + XposedBridge.stackTraceToString(t2));
-            }
+            log("install failed: " + XposedBridge.stackTraceToString(t));
         }
     }
 
@@ -161,27 +125,6 @@ public class MainHook implements IXposedHookLoadPackage {
             });
         } catch (Throwable t) {
             log("hook " + clazz.getSimpleName() + "." + method + " skipped: " + t.getMessage());
-        }
-    }
-
-    private static final Field F_IS_VIP;
-    private static final Field F_WAS_VIP;
-    private static final Field F_HAS_TRAILED;
-    private static final Field F_IS_SUBSCRIBED;
-
-    static {
-        F_IS_VIP = findField("isVip");
-        F_WAS_VIP = findField("wasVip");
-        F_HAS_TRAILED = findField("hasTrailed");
-        F_IS_SUBSCRIBED = findField("isSubscribed");
-    }
-
-    private static Field findField(String name) {
-        try {
-            // 字段挂在 VipInfo 上，用 Object 反射通用获取（类由运行时 classloader 提供）
-            return null; // 占位，实际在 patchVipInfoFields 中懒获取
-        } catch (Throwable t) {
-            return null;
         }
     }
 
